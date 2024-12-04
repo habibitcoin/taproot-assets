@@ -735,6 +735,14 @@
           "$ref": "#/definitions/assetwalletrpcTxTemplate",
           "description": "Use the asset outputs and optional asset inputs from this raw template."
         },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/assetwalletrpcPrevId"
+          },
+          "description": "An optional list of inputs to use. These inputs will be used regardless of\nwhether `psbt` or `raw` is provided. Every input must be an asset UTXO\nknown to the wallet."
+        },
         "coin_select_type": {
           "$ref": "#/definitions/assetwalletrpcCoinSelectType",
           "description": "Specify the type of coins that should be selected. Defaults to allowing both\nscript trees and BIP-086 compliant inputs."

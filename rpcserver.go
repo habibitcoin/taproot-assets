@@ -2160,7 +2160,7 @@ func (r *rpcServer) UpdateVirtualPsbt(ctx context.Context, req *wrpc.UpdateVirtu
 		return nil, fmt.Errorf("failed to decode virtual PSBT: %w", err)
 	}
 
-	if len(vPsbt.Outputs) != 1 {
+	if len(vPsbt.Outputs) == 0 {
 		return nil, fmt.Errorf("unexpected number of outputs in virtual PSBT: %d", len(vPsbt.Outputs))
 	}
 
@@ -2169,8 +2169,16 @@ func (r *rpcServer) UpdateVirtualPsbt(ctx context.Context, req *wrpc.UpdateVirtu
 	if err != nil {
 		return nil, fmt.Errorf("invalid script key: %w", err)
 	}
+
+	vKeyLocator, err := r.cfg.AssetWallet.FetchScriptKey(
+		ctx, scriptPubKey,
+	)
+	if err != nil {
+		return nil, err
+	}
 	scriptKey := asset.ScriptKey{
-		PubKey: scriptPubKey,
+		PubKey:           scriptPubKey,
+		TweakedScriptKey: vKeyLocator,
 	}
 
 	// Step 3: Derive a new anchor internal key using LND's keychain service.
@@ -2191,26 +2199,25 @@ func (r *rpcServer) UpdateVirtualPsbt(ctx context.Context, req *wrpc.UpdateVirtu
 	// Step 5: Update Bitcoin PSBT with Bob's derived internal key.
 	// This section assumes the Bitcoin PSBT is linked and accessible for modification.
 	// Adjust as needed if the Bitcoin PSBT is passed separately.
-	if req.AnchorPsbt != nil {
-		btcPsbt, err := psbt.NewFromRawBytes(bytes.NewReader(req.AnchorPsbt), false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode Bitcoin PSBT: %w", err)
-		}
 
-		if len(btcPsbt.Outputs) < 2 {
-			return nil, fmt.Errorf("Bitcoin PSBT must have at least 2 outputs")
-		}
-
-		btcPsbt.Outputs[1].TaprootInternalKey = vOut.AnchorOutputInternalKey.SerializeCompressed()
-		btcPsbt.Outputs[1].Bip32Derivation = vOut.AnchorOutputBip32Derivation
-		btcPsbt.Outputs[1].TaprootBip32Derivation = vOut.AnchorOutputTaprootBip32Derivation
-
-		var btcPsbtBuf bytes.Buffer
-		if err := btcPsbt.Serialize(&btcPsbtBuf); err != nil {
-			return nil, fmt.Errorf("failed to serialize Bitcoin PSBT: %w", err)
-		}
-		req.AnchorPsbt = btcPsbtBuf.Bytes()
+	btcPsbt, err := psbt.NewFromRawBytes(bytes.NewReader(req.AnchorPsbt), false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode Bitcoin PSBT: %w", err)
 	}
+
+	if len(btcPsbt.Outputs) < 2 {
+		return nil, fmt.Errorf("Bitcoin PSBT must have at least 2 outputs")
+	}
+
+	btcPsbt.Outputs[1].TaprootInternalKey = vOut.AnchorOutputInternalKey.SerializeCompressed()
+	btcPsbt.Outputs[1].Bip32Derivation = vOut.AnchorOutputBip32Derivation
+	btcPsbt.Outputs[1].TaprootBip32Derivation = vOut.AnchorOutputTaprootBip32Derivation
+
+	var btcPsbtBuf bytes.Buffer
+	if err := btcPsbt.Serialize(&btcPsbtBuf); err != nil {
+		return nil, fmt.Errorf("failed to serialize Bitcoin PSBT: %w", err)
+	}
+	req.AnchorPsbt = btcPsbtBuf.Bytes()
 
 	// Step 6: Prepare output assets and restore previous witnesses.
 	prevWitnessBackup := vOut.Asset.PrevWitnesses
@@ -2253,6 +2260,32 @@ func (r *rpcServer) FundVirtualPsbt(ctx context.Context,
 			return nil, fmt.Errorf("unable to decode psbt: %w", err)
 		}
 
+		// Support restricting PrevIds to a subset of the inputs.
+		prevIDs := []asset.PrevID{}
+		for _, input := range req.Inputs {
+			// Create a new chainhash.Hash and set its bytes
+			var hash chainhash.Hash
+			err := hash.SetBytes(input.Outpoint.Txid)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"invalid Txid length: %w", err,
+				)
+			}
+			// Decode the input into an asset.PrevID
+			outpoint := wire.OutPoint{
+				Hash:  hash,
+				Index: input.Outpoint.OutputIndex,
+			}
+			prevID := asset.PrevID{
+				OutPoint: outpoint,
+				ID:       asset.ID(input.Id),
+				ScriptKey: asset.SerializedKey(
+					input.ScriptKey,
+				),
+			}
+			prevIDs = append(prevIDs, prevID)
+		}
+
 		// Extract the recipient information from the packet. This
 		// basically assembles the asset ID we want to send to and the
 		// sum of all output amounts.
@@ -2262,6 +2295,9 @@ func (r *rpcServer) FundVirtualPsbt(ctx context.Context,
 		if err != nil {
 			return nil, fmt.Errorf("unable to describe packet "+
 				"recipients: %w", err)
+		}
+		if len(prevIDs) > 0 {
+			desc.PrevIDs = prevIDs
 		}
 
 		desc.CoinSelectType = coinSelectType
@@ -2273,30 +2309,28 @@ func (r *rpcServer) FundVirtualPsbt(ctx context.Context,
 	case req.GetRaw() != nil:
 		raw := req.GetRaw()
 		prevIDs := []asset.PrevID{}
-		if len(raw.Inputs) > 0 {
-			for _, input := range raw.Inputs {
-				// Create a new chainhash.Hash and set its bytes
-				var hash chainhash.Hash
-				err := hash.SetBytes(input.Outpoint.Txid)
-				if err != nil {
-					return nil, fmt.Errorf(
-						"invalid Txid length: %w", err,
-					)
-				}
-				// Decode the input into an asset.PrevID
-				outpoint := wire.OutPoint{
-					Hash:  hash,
-					Index: input.Outpoint.OutputIndex,
-				}
-				prevID := asset.PrevID{
-					OutPoint: outpoint,
-					ID:       asset.ID(input.Id),
-					ScriptKey: asset.SerializedKey(
-						input.ScriptKey,
-					),
-				}
-				prevIDs = append(prevIDs, prevID)
+		for _, input := range raw.Inputs {
+			// Create a new chainhash.Hash and set its bytes
+			var hash chainhash.Hash
+			err := hash.SetBytes(input.Outpoint.Txid)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"invalid Txid length: %w", err,
+				)
 			}
+			// Decode the input into an asset.PrevID
+			outpoint := wire.OutPoint{
+				Hash:  hash,
+				Index: input.Outpoint.OutputIndex,
+			}
+			prevID := asset.PrevID{
+				OutPoint: outpoint,
+				ID:       asset.ID(input.Id),
+				ScriptKey: asset.SerializedKey(
+					input.ScriptKey,
+				),
+			}
+			prevIDs = append(prevIDs, prevID)
 		}
 		if len(raw.Recipients) > 1 {
 			return nil, fmt.Errorf("only one recipient supported")
