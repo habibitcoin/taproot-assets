@@ -2192,6 +2192,7 @@ func (r *rpcServer) UpdateVirtualPsbt(ctx context.Context, req *wrpc.UpdateVirtu
 	// Step 4: Update the vPSBT output with the new script key and internal key.
 	vOut := vPsbt.Outputs[0]
 	vOut.ScriptKey = scriptKey
+	vOut.AnchorOutputIndex = 1
 	vOut.AnchorOutputBip32Derivation = nil
 	vOut.AnchorOutputTaprootBip32Derivation = nil
 	vOut.SetAnchorInternalKey(keyDesc, r.cfg.ChainParams.HDCoinType)
@@ -2209,7 +2210,7 @@ func (r *rpcServer) UpdateVirtualPsbt(ctx context.Context, req *wrpc.UpdateVirtu
 		return nil, fmt.Errorf("Bitcoin PSBT must have at least 2 outputs")
 	}
 
-	btcPsbt.Outputs[1].TaprootInternalKey = vOut.AnchorOutputInternalKey.SerializeCompressed()
+	btcPsbt.Outputs[1].TaprootInternalKey = schnorr.SerializePubKey(vOut.AnchorOutputInternalKey)
 	btcPsbt.Outputs[1].Bip32Derivation = vOut.AnchorOutputBip32Derivation
 	btcPsbt.Outputs[1].TaprootBip32Derivation = vOut.AnchorOutputTaprootBip32Derivation
 
