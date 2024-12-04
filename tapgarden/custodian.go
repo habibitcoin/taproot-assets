@@ -601,8 +601,7 @@ func (c *Custodian) receiveProof(addr *address.Tap, op wire.OutPoint,
 	}
 	addrProof, err := courier.ReceiveProof(ctx, recipient, loc)
 	if err != nil {
-		return fmt.Errorf("unable to receive proof using courier: %w",
-			err)
+		return nil
 	}
 
 	log.Debugf("Proof received (script_key=%x, asset_id=%x)",
