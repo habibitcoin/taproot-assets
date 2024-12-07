@@ -2210,7 +2210,7 @@ func (r *rpcServer) UpdateVirtualPsbt(ctx context.Context, req *wrpc.UpdateVirtu
 		return nil, fmt.Errorf("Bitcoin PSBT must have at least 2 outputs")
 	}
 
-	btcPsbt.Outputs[1].TaprootInternalKey = schnorr.SerializePubKey(vOut.AnchorOutputInternalKey)
+	btcPsbt.Outputs[1].TaprootInternalKey = schnorr.SerializePubKey(keyDesc.PubKey)
 	btcPsbt.Outputs[1].Bip32Derivation = vOut.AnchorOutputBip32Derivation
 	btcPsbt.Outputs[1].TaprootBip32Derivation = vOut.AnchorOutputTaprootBip32Derivation
 
