@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcwallet/wtxmgr"
 	"github.com/davecgh/go-spew/spew"
@@ -2078,6 +2080,165 @@ func (r *rpcServer) AddrReceives(ctx context.Context,
 	return resp, nil
 }
 
+func (r *rpcServer) CreateInteractiveSendTemplate(
+	ctx context.Context,
+	in *wrpc.CreateInteractiveSendTemplateRequest,
+) (*wrpc.CreateInteractiveSendTemplateResponse, error) {
+
+	// 1. Parse and validate inputs
+	if in.Amount == 0 || len(in.ScriptKey) == 0 || len(in.AnchorInternalKey) == 0 {
+		return nil, fmt.Errorf("invalid input parameters")
+	}
+
+	var assetID asset.ID
+	switch {
+	case len(in.GetAssetId()) > 0:
+		copy(assetID[:], in.GetAssetId())
+
+	case len(in.GetAssetIdStr()) > 0:
+		assetIDBytes, err := hex.DecodeString(in.GetAssetIdStr())
+		if err != nil {
+			return nil, fmt.Errorf("error decoding asset ID: %w",
+				err)
+		}
+
+		copy(assetID[:], assetIDBytes)
+
+	default:
+		return nil, fmt.Errorf("asset ID must be specified")
+	}
+
+	// Parse the script key
+	scriptPubKey, err := parseUserKey(in.ScriptKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid script key: %w", err)
+	}
+	scriptKey := asset.ScriptKey{
+		PubKey: scriptPubKey,
+	}
+
+	// Parse the anchor internal key
+	anchorInternalKey, err := btcec.ParsePubKey(in.AnchorInternalKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid anchor internal key: %w", err)
+	}
+
+	// 2. Create the virtual PSBT template
+	vPkt := tappsbt.ForInteractiveSend(
+		assetID,
+		in.Amount,
+		scriptKey,
+		in.LockTime,
+		in.RelativeLockTime,
+		in.OutputIndex,
+		keychain.KeyDescriptor{
+			PubKey: anchorInternalKey,
+		},
+		asset.V0,
+		&r.cfg.ChainParams,
+	)
+
+	// 2.5 Update the sighash flag
+	// TODO: Add support for sighash flags in the RPC request.
+	vPkt.Inputs[0].SighashType = txscript.SigHashNone
+
+	// 3. Serialize the virtual PSBT template
+	psbtBytes, err := tappsbt.Encode(vPkt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize virtual PSBT: %w", err)
+	}
+
+	return &wrpc.CreateInteractiveSendTemplateResponse{
+		Psbt: psbtBytes,
+	}, nil
+}
+
+func (r *rpcServer) UpdateVirtualPsbt(ctx context.Context, req *wrpc.UpdateVirtualPsbtRequest) (*wrpc.UpdateVirtualPsbtResponse, error) {
+	// Step 1: Decode the provided virtual PSBT.
+	vPsbt, err := tappsbt.Decode(req.VirtualPsbt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode virtual PSBT: %w", err)
+	}
+
+	if len(vPsbt.Outputs) == 0 {
+		return nil, fmt.Errorf("unexpected number of outputs in virtual PSBT: %d", len(vPsbt.Outputs))
+	}
+
+	// Step 2: Parse the provided script key.
+	scriptPubKey, err := btcec.ParsePubKey(req.ScriptKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid script key: %w", err)
+	}
+
+	vKeyLocator, err := r.cfg.AssetWallet.FetchScriptKey(
+		ctx, scriptPubKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	scriptKey := asset.ScriptKey{
+		PubKey:           scriptPubKey,
+		TweakedScriptKey: vKeyLocator,
+	}
+
+	// Step 3: Derive a new anchor internal key using LND's keychain service.
+	keyDesc, err := r.cfg.AddrBook.NextInternalKey(ctx, keychain.KeyFamily(
+		212,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive anchor internal key: %w", err)
+	}
+
+	// Step 4: Update the vPSBT output with the new script key and internal key.
+	vOut := vPsbt.Outputs[0]
+	vOut.ScriptKey = scriptKey
+	vOut.AnchorOutputIndex = 1
+	vOut.AnchorOutputBip32Derivation = nil
+	vOut.AnchorOutputTaprootBip32Derivation = nil
+	vOut.SetAnchorInternalKey(keyDesc, r.cfg.ChainParams.HDCoinType)
+
+	// Step 5: Update Bitcoin PSBT with Bob's derived internal key.
+	// This section assumes the Bitcoin PSBT is linked and accessible for modification.
+	// Adjust as needed if the Bitcoin PSBT is passed separately.
+
+	btcPsbt, err := psbt.NewFromRawBytes(bytes.NewReader(req.AnchorPsbt), false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode Bitcoin PSBT: %w", err)
+	}
+
+	if len(btcPsbt.Outputs) < 2 {
+		return nil, fmt.Errorf("Bitcoin PSBT must have at least 2 outputs")
+	}
+
+	btcPsbt.Outputs[1].TaprootInternalKey = schnorr.SerializePubKey(keyDesc.PubKey)
+	btcPsbt.Outputs[1].Bip32Derivation = vOut.AnchorOutputBip32Derivation
+	btcPsbt.Outputs[1].TaprootBip32Derivation = vOut.AnchorOutputTaprootBip32Derivation
+
+	var btcPsbtBuf bytes.Buffer
+	if err := btcPsbt.Serialize(&btcPsbtBuf); err != nil {
+		return nil, fmt.Errorf("failed to serialize Bitcoin PSBT: %w", err)
+	}
+	req.AnchorPsbt = btcPsbtBuf.Bytes()
+
+	// Step 6: Prepare output assets and restore previous witnesses.
+	prevWitnessBackup := vOut.Asset.PrevWitnesses
+	if err := tapsend.PrepareOutputAssets(ctx, vPsbt); err != nil {
+		return nil, fmt.Errorf("failed to prepare output assets: %w", err)
+	}
+	vOut.Asset.PrevWitnesses = prevWitnessBackup
+
+	// Step 7: Serialize the updated virtual PSBT.
+	updatedVPsbtBytes, err := tappsbt.Encode(vPsbt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize updated virtual PSBT: %w", err)
+	}
+
+	return &wrpc.UpdateVirtualPsbtResponse{
+		UpdatedVirtualPsbt: updatedVPsbtBytes,
+		UpdatedAnchorPsbt:  req.AnchorPsbt,
+	}, nil
+}
+
 // FundVirtualPsbt selects inputs from the available asset commitments to fund
 // a virtual transaction matching the template.
 func (r *rpcServer) FundVirtualPsbt(ctx context.Context,
@@ -2100,6 +2261,32 @@ func (r *rpcServer) FundVirtualPsbt(ctx context.Context,
 			return nil, fmt.Errorf("unable to decode psbt: %w", err)
 		}
 
+		// Support restricting PrevIds to a subset of the inputs.
+		prevIDs := []asset.PrevID{}
+		for _, input := range req.Inputs {
+			// Create a new chainhash.Hash and set its bytes
+			var hash chainhash.Hash
+			err := hash.SetBytes(input.Outpoint.Txid)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"invalid Txid length: %w", err,
+				)
+			}
+			// Decode the input into an asset.PrevID
+			outpoint := wire.OutPoint{
+				Hash:  hash,
+				Index: input.Outpoint.OutputIndex,
+			}
+			prevID := asset.PrevID{
+				OutPoint: outpoint,
+				ID:       asset.ID(input.Id),
+				ScriptKey: asset.SerializedKey(
+					input.ScriptKey,
+				),
+			}
+			prevIDs = append(prevIDs, prevID)
+		}
+
 		// Extract the recipient information from the packet. This
 		// basically assembles the asset ID we want to send to and the
 		// sum of all output amounts.
@@ -2109,6 +2296,9 @@ func (r *rpcServer) FundVirtualPsbt(ctx context.Context,
 		if err != nil {
 			return nil, fmt.Errorf("unable to describe packet "+
 				"recipients: %w", err)
+		}
+		if len(prevIDs) > 0 {
+			desc.PrevIDs = prevIDs
 		}
 
 		desc.CoinSelectType = coinSelectType
@@ -2120,30 +2310,28 @@ func (r *rpcServer) FundVirtualPsbt(ctx context.Context,
 	case req.GetRaw() != nil:
 		raw := req.GetRaw()
 		prevIDs := []asset.PrevID{}
-		if len(raw.Inputs) > 0 {
-			for _, input := range raw.Inputs {
-				// Create a new chainhash.Hash and set its bytes
-				var hash chainhash.Hash
-				err := hash.SetBytes(input.Outpoint.Txid)
-				if err != nil {
-					return nil, fmt.Errorf(
-						"invalid Txid length: %w", err,
-					)
-				}
-				// Decode the input into an asset.PrevID
-				outpoint := wire.OutPoint{
-					Hash:  hash,
-					Index: input.Outpoint.OutputIndex,
-				}
-				prevID := asset.PrevID{
-					OutPoint: outpoint,
-					ID:       asset.ID(input.Id),
-					ScriptKey: asset.SerializedKey(
-						input.ScriptKey,
-					),
-				}
-				prevIDs = append(prevIDs, prevID)
+		for _, input := range raw.Inputs {
+			// Create a new chainhash.Hash and set its bytes
+			var hash chainhash.Hash
+			err := hash.SetBytes(input.Outpoint.Txid)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"invalid Txid length: %w", err,
+				)
 			}
+			// Decode the input into an asset.PrevID
+			outpoint := wire.OutPoint{
+				Hash:  hash,
+				Index: input.Outpoint.OutputIndex,
+			}
+			prevID := asset.PrevID{
+				OutPoint: outpoint,
+				ID:       asset.ID(input.Id),
+				ScriptKey: asset.SerializedKey(
+					input.ScriptKey,
+				),
+			}
+			prevIDs = append(prevIDs, prevID)
 		}
 		if len(raw.Recipients) > 1 {
 			return nil, fmt.Errorf("only one recipient supported")
@@ -2581,6 +2769,62 @@ func (r *rpcServer) CommitVirtualPsbts(ctx context.Context,
 	success = true
 
 	return response, nil
+}
+
+func (r *rpcServer) PrepareAnchoringTemplate(
+	ctx context.Context,
+	req *wrpc.PrepareAnchoringTemplateRequest,
+) (*wrpc.PrepareAnchoringTemplateResponse, error) {
+	// Step 1: Decode the signed virtual PSBT.
+	vPkt, err := tappsbt.Decode(req.VirtualPsbt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode virtual PSBT: %w", err)
+	}
+
+	// Step 2: Create the Bitcoin PSBT template for anchoring.
+	btcPsbt, err := tapsend.PrepareAnchoringTemplate([]*tappsbt.VPacket{vPkt})
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare anchoring template: %w", err)
+	}
+
+	if len(vPkt.Outputs) == 0 {
+		return nil, fmt.Errorf("virtual PSBT has no inputs")
+	}
+
+	// Step 3: Assume the first input can custody the BTC from the swap in the output.
+	// At this point, the vPkt has the same scriptKey for the input and output.
+	firstInput := vPkt.Inputs[0]
+	previousPubKey := vPkt.Outputs[0].ScriptKey.PubKey.SerializeCompressed()
+	pkScript, err := txscript.NewScriptBuilder().
+		AddOp(txscript.OP_1).        // Taproot version byte
+		AddData(previousPubKey[1:]). // x-only public key (strip the prefix byte)
+		Script()
+	if err != nil {
+		log.Fatalf("Failed to create PkScript: %v", err)
+	}
+
+	// Step 4: Set the anchor output terms (amount and address).
+	btcPsbt.UnsignedTx.TxOut[0].PkScript = pkScript
+	btcPsbt.UnsignedTx.TxOut[0].Value = req.OutputAmt
+
+	// Copy derivation info from the first vPkt input to the first output.
+	if firstInput.Bip32Derivation == nil || firstInput.TaprootBip32Derivation == nil {
+		return nil, fmt.Errorf("missing derivation info in vPkt input")
+	}
+
+	btcPsbt.Outputs[0].Bip32Derivation = firstInput.Bip32Derivation
+	btcPsbt.Outputs[0].TaprootBip32Derivation = firstInput.TaprootBip32Derivation
+	btcPsbt.Outputs[0].TaprootInternalKey = firstInput.TaprootInternalKey
+
+	// Step 7: Serialize the prepared Bitcoin PSBT.
+	var buf bytes.Buffer
+	if err := btcPsbt.Serialize(&buf); err != nil {
+		return nil, fmt.Errorf("failed to serialize Bitcoin PSBT: %w", err)
+	}
+
+	return &wrpc.PrepareAnchoringTemplateResponse{
+		AnchorPsbt: buf.Bytes(),
+	}, nil
 }
 
 // validateInputAssets makes sure that the input assets are correct and their

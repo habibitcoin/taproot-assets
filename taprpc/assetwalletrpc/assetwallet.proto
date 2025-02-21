@@ -8,6 +8,26 @@ option go_package = "github.com/lightninglabs/taproot-assets/taprpc/assetwalletr
 
 service AssetWallet {
     /*
+    Creates a virtual PSBT template for an interactive asset send.
+    */
+    rpc CreateInteractiveSendTemplate (CreateInteractiveSendTemplateRequest)
+        returns (CreateInteractiveSendTemplateResponse);
+
+    /*
+    PrepareAnchoringTemplate prepares a Bitcoin PSBT for anchoring the given
+    signed virtual PSBT.
+    */
+    rpc PrepareAnchoringTemplate (PrepareAnchoringTemplateRequest)
+        returns (PrepareAnchoringTemplateResponse);
+
+    /*
+    UpdateVirtualPSBT updates the script key of the output in the given virtual
+    PSBT and optionally the linked Bitcoin PSBT.
+    */
+    rpc UpdateVirtualPsbt (UpdateVirtualPsbtRequest)
+        returns (UpdateVirtualPsbtResponse);
+
+    /*
     FundVirtualPsbt selects inputs from the available asset commitments to fund
     a virtual transaction matching the template.
     */
@@ -148,10 +168,17 @@ message FundVirtualPsbtRequest {
     }
 
     /*
+    An optional list of inputs to use. These inputs will be used regardless of
+    whether `psbt` or `raw` is provided. Every input must be an asset UTXO
+    known to the wallet.
+    */
+    repeated PrevId inputs = 3;
+
+    /*
     Specify the type of coins that should be selected. Defaults to allowing both
     script trees and BIP-086 compliant inputs.
     */
-    CoinSelectType coin_select_type = 3;
+    CoinSelectType coin_select_type = 4;
 }
 
 message FundVirtualPsbtResponse {
@@ -178,6 +205,82 @@ message FundVirtualPsbtResponse {
     action.
     */
     repeated bytes passive_asset_psbts = 3;
+}
+
+message CreateInteractiveSendTemplateRequest {
+    oneof asset {
+        /*
+        The raw bytes of the asset ID being sent.
+        */
+        bytes asset_id = 1;
+
+        /*
+        The hex-encoded asset ID of the asset being sent.
+        */
+        string asset_id_str = 2;
+    }
+
+    /*
+    Amount of the asset to send.
+    */
+    uint64 amount = 3;
+
+    /*
+    Lock time (optional).
+    */
+    uint64 lock_time = 4;
+
+    /*
+    Relative lock time (optional).
+    */
+    uint64 relative_lock_time = 5;
+
+    /*
+    Output index for the anchor.
+    */
+    uint32 output_index = 6;
+
+    /*
+    Script key for the receiving address.
+    */
+    bytes script_key = 7;
+
+    /*
+    Anchor internal key for the transaction.
+    */
+    bytes anchor_internal_key = 8;
+}
+
+message CreateInteractiveSendTemplateResponse {
+    /*
+    The serialized virtual PSBT template.
+    */
+    bytes psbt = 1;
+}
+
+message PrepareAnchoringTemplateRequest {
+    // The signed virtual PSBT.
+    bytes virtual_psbt = 1;
+
+    // The amount (in satoshis) to send to the output address.
+    int64 output_amt = 2;
+}
+
+message PrepareAnchoringTemplateResponse {
+    // The serialized Bitcoin PSBT for anchoring.
+    bytes anchor_psbt = 1;
+}
+
+message UpdateVirtualPsbtRequest {
+    bytes virtual_psbt = 1;  // The serialized virtual PSBT to update.
+    bytes script_key = 2;    // The new script key for the output.
+    bytes anchor_psbt = 3;   // Optional: The linked Bitcoin PSBT.
+}
+
+message UpdateVirtualPsbtResponse {
+    bytes updated_virtual_psbt = 1;  // The updated serialized virtual PSBT.
+    bytes updated_anchor_psbt =
+        2;  // Optional: The updated Bitcoin PSBT, if provided.
 }
 
 message TxTemplate {

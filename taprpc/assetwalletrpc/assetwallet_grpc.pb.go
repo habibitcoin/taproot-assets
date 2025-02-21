@@ -19,6 +19,14 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AssetWalletClient interface {
+	// Creates a virtual PSBT template for an interactive asset send.
+	CreateInteractiveSendTemplate(ctx context.Context, in *CreateInteractiveSendTemplateRequest, opts ...grpc.CallOption) (*CreateInteractiveSendTemplateResponse, error)
+	// PrepareAnchoringTemplate prepares a Bitcoin PSBT for anchoring the given
+	// signed virtual PSBT.
+	PrepareAnchoringTemplate(ctx context.Context, in *PrepareAnchoringTemplateRequest, opts ...grpc.CallOption) (*PrepareAnchoringTemplateResponse, error)
+	// UpdateVirtualPSBT updates the script key of the output in the given virtual
+	// PSBT and optionally the linked Bitcoin PSBT.
+	UpdateVirtualPsbt(ctx context.Context, in *UpdateVirtualPsbtRequest, opts ...grpc.CallOption) (*UpdateVirtualPsbtResponse, error)
 	// FundVirtualPsbt selects inputs from the available asset commitments to fund
 	// a virtual transaction matching the template.
 	FundVirtualPsbt(ctx context.Context, in *FundVirtualPsbtRequest, opts ...grpc.CallOption) (*FundVirtualPsbtResponse, error)
@@ -85,6 +93,33 @@ type assetWalletClient struct {
 
 func NewAssetWalletClient(cc grpc.ClientConnInterface) AssetWalletClient {
 	return &assetWalletClient{cc}
+}
+
+func (c *assetWalletClient) CreateInteractiveSendTemplate(ctx context.Context, in *CreateInteractiveSendTemplateRequest, opts ...grpc.CallOption) (*CreateInteractiveSendTemplateResponse, error) {
+	out := new(CreateInteractiveSendTemplateResponse)
+	err := c.cc.Invoke(ctx, "/assetwalletrpc.AssetWallet/CreateInteractiveSendTemplate", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *assetWalletClient) PrepareAnchoringTemplate(ctx context.Context, in *PrepareAnchoringTemplateRequest, opts ...grpc.CallOption) (*PrepareAnchoringTemplateResponse, error) {
+	out := new(PrepareAnchoringTemplateResponse)
+	err := c.cc.Invoke(ctx, "/assetwalletrpc.AssetWallet/PrepareAnchoringTemplate", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *assetWalletClient) UpdateVirtualPsbt(ctx context.Context, in *UpdateVirtualPsbtRequest, opts ...grpc.CallOption) (*UpdateVirtualPsbtResponse, error) {
+	out := new(UpdateVirtualPsbtResponse)
+	err := c.cc.Invoke(ctx, "/assetwalletrpc.AssetWallet/UpdateVirtualPsbt", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *assetWalletClient) FundVirtualPsbt(ctx context.Context, in *FundVirtualPsbtRequest, opts ...grpc.CallOption) (*FundVirtualPsbtResponse, error) {
@@ -208,6 +243,14 @@ func (c *assetWalletClient) DeclareScriptKey(ctx context.Context, in *DeclareScr
 // All implementations must embed UnimplementedAssetWalletServer
 // for forward compatibility
 type AssetWalletServer interface {
+	// Creates a virtual PSBT template for an interactive asset send.
+	CreateInteractiveSendTemplate(context.Context, *CreateInteractiveSendTemplateRequest) (*CreateInteractiveSendTemplateResponse, error)
+	// PrepareAnchoringTemplate prepares a Bitcoin PSBT for anchoring the given
+	// signed virtual PSBT.
+	PrepareAnchoringTemplate(context.Context, *PrepareAnchoringTemplateRequest) (*PrepareAnchoringTemplateResponse, error)
+	// UpdateVirtualPSBT updates the script key of the output in the given virtual
+	// PSBT and optionally the linked Bitcoin PSBT.
+	UpdateVirtualPsbt(context.Context, *UpdateVirtualPsbtRequest) (*UpdateVirtualPsbtResponse, error)
 	// FundVirtualPsbt selects inputs from the available asset commitments to fund
 	// a virtual transaction matching the template.
 	FundVirtualPsbt(context.Context, *FundVirtualPsbtRequest) (*FundVirtualPsbtResponse, error)
@@ -273,6 +316,15 @@ type AssetWalletServer interface {
 type UnimplementedAssetWalletServer struct {
 }
 
+func (UnimplementedAssetWalletServer) CreateInteractiveSendTemplate(context.Context, *CreateInteractiveSendTemplateRequest) (*CreateInteractiveSendTemplateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateInteractiveSendTemplate not implemented")
+}
+func (UnimplementedAssetWalletServer) PrepareAnchoringTemplate(context.Context, *PrepareAnchoringTemplateRequest) (*PrepareAnchoringTemplateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PrepareAnchoringTemplate not implemented")
+}
+func (UnimplementedAssetWalletServer) UpdateVirtualPsbt(context.Context, *UpdateVirtualPsbtRequest) (*UpdateVirtualPsbtResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateVirtualPsbt not implemented")
+}
 func (UnimplementedAssetWalletServer) FundVirtualPsbt(context.Context, *FundVirtualPsbtRequest) (*FundVirtualPsbtResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FundVirtualPsbt not implemented")
 }
@@ -323,6 +375,60 @@ type UnsafeAssetWalletServer interface {
 
 func RegisterAssetWalletServer(s grpc.ServiceRegistrar, srv AssetWalletServer) {
 	s.RegisterService(&AssetWallet_ServiceDesc, srv)
+}
+
+func _AssetWallet_CreateInteractiveSendTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateInteractiveSendTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AssetWalletServer).CreateInteractiveSendTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/assetwalletrpc.AssetWallet/CreateInteractiveSendTemplate",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AssetWalletServer).CreateInteractiveSendTemplate(ctx, req.(*CreateInteractiveSendTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AssetWallet_PrepareAnchoringTemplate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareAnchoringTemplateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AssetWalletServer).PrepareAnchoringTemplate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/assetwalletrpc.AssetWallet/PrepareAnchoringTemplate",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AssetWalletServer).PrepareAnchoringTemplate(ctx, req.(*PrepareAnchoringTemplateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AssetWallet_UpdateVirtualPsbt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateVirtualPsbtRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AssetWalletServer).UpdateVirtualPsbt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/assetwalletrpc.AssetWallet/UpdateVirtualPsbt",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AssetWalletServer).UpdateVirtualPsbt(ctx, req.(*UpdateVirtualPsbtRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _AssetWallet_FundVirtualPsbt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -566,6 +672,18 @@ var AssetWallet_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "assetwalletrpc.AssetWallet",
 	HandlerType: (*AssetWalletServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateInteractiveSendTemplate",
+			Handler:    _AssetWallet_CreateInteractiveSendTemplate_Handler,
+		},
+		{
+			MethodName: "PrepareAnchoringTemplate",
+			Handler:    _AssetWallet_PrepareAnchoringTemplate_Handler,
+		},
+		{
+			MethodName: "UpdateVirtualPsbt",
+			Handler:    _AssetWallet_UpdateVirtualPsbt_Handler,
+		},
 		{
 			MethodName: "FundVirtualPsbt",
 			Handler:    _AssetWallet_FundVirtualPsbt_Handler,

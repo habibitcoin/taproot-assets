@@ -103,6 +103,18 @@ var (
 			Entity: "proofs",
 			Action: "write",
 		}},
+		"/assetwalletrpc.AssetWallet/CreateInteractiveSendTemplate": {{
+			Entity: "assets",
+			Action: "read",
+		}},
+		"/assetwalletrpc.AssetWallet/PrepareAnchoringTemplate": {{
+			Entity: "assets",
+			Action: "read",
+		}},
+		"/assetwalletrpc.AssetWallet/UpdateVirtualPsbt": {{
+			Entity: "assets",
+			Action: "read",
+		}},
 		"/assetwalletrpc.AssetWallet/FundVirtualPsbt": {{
 			Entity: "assets",
 			Action: "write",
